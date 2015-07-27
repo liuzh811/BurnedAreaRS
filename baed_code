@@ -1,52 +1,57 @@
 #3/9/2015
 #by Zhihua Liu: liuzh811@gmail.com
 
-# 1. this code aims at mapping burned area at high spatial and temporal resolution using LANDSAT and MODIS MOD13Q1 vegetation indices data
-# 2. before applying the code, landsat image should be normalized (Canty and Neilsen et al (2008)) to extract burned area
-# 3. there are a total of four sections, see following for details 
+# 1. this code aims at mapping burned area at high spatial and temporal resolution using Landsat and MODIS MOD13Q1 vegetation indices data
+# 2. Landsat image should be normalized (Canty and Neilsen et al (2008)) to extract burned area
+# 3. create a "data"  folder to store MODIS and Landsat data, as well as study area polygons
+# 4. create a "result" folder to store fire polygon
 
 ############## section 1: download MODIS data and prepare functions
-setwd("D:\\dataset\\XinganTM\\Russian\\p122020\\iMAD_p122020\\supp")
+setwd("D:\\GitHub\\BurnedAreaRS")
 
-library("MODIS")
+# load libraries
 library(rgdal)
 library(raster)
+library(dismo)
+library(gbm)
+library(rgeos)
 
-testr1 <- readOGR(dsn = ".", layer = "test_area")
-
+#read test area polygon
+testr1 <- readOGR(dsn = ".\\data", layer = "test_area")
 proj.utm = projection(testr1)
 proj.geo = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs +towgs84=0,0,0 "
 
-MODISoptions(localArcPath="D:\\dataset\\XinganTM\\Russian\\p122020\\iMAD_p122020",
-             outDirPath="D:\\dataset\\XinganTM\\Russian\\p122020\\iMAD_p122020",
+#download MODIS13Q1 VI data, see MODIS package for details
+MODISoptions(localArcPath=".",
+             outDirPath=".",
              gdalPath='c:/OSGeo4W64/bin')
 
 dates <- as.POSIXct( as.Date(c("1/5/2010","1/11/2011"),format = "%d/%m/%Y") )
 dates2 <- transDate(dates[1],dates[2]) # Transform input dates from before
 
-# getProduct() # list available products
-runGdal(product="MOD13Q1",  #burned area/combined/Tile/500m/monthly
-        begin=dates2$beginDOY,
-        end = dates2$endDOY,
-        tileH = 25,tileV = 3, 
-        SDSstring = "111", #only extract the first 2 layers, if want 1 and 3 layer, can be set as 101
+# getProduct() # list available MODIS products
+runGdal(product="MOD13Q1",  #VI/combined/Tile/500m/monthly
+        begin=dates2$beginDOY, #start date
+        end = dates2$endDOY,#end date
+        tileH = 25,tileV = 3, #tile
+        SDSstring = "111", #extract the first 3 layers
         extent = testr1, #crop to extent
-        outProj=proj.utm,
-        job = "VI")
+        outProj=proj.utm, #reproject to UTM
+        job = "data") #download folder
 
 #read MODIS NDVI data 
-ref <- preStack(path=".\\VI", pattern="*NDVI.tif$")
-## YearDOYmodis = substr(ref, nchar(ref[1])-27, nchar(ref[1])-21)  ##use this one if evi dataset was used
+ref <- list.files(path=".\\data", pattern="*NDVI.tif$")
 YearDOYmodis = substr(ref, nchar(ref[1])-28, nchar(ref[1])-22)  ##use this one if ndvi dataset was used
 Yearmodis = as.numeric(substr(YearDOYmodis,1,4))
 DOYmodis = as.numeric(substr(YearDOYmodis,5,7))
-s <- stack(ref)
+s <- stack(paste(".\\data", ref, sep = ""))
 
 #read NDVI quality data info
-ref.qa <- preStack(path=".\\VI", pattern="*VI_Quality.tif$")
-s.qa <- stack(ref.qa)
+ref.qa <- list.files(path=".\\data", pattern="*VI_Quality.tif$")
+s.qa <- stack(paste(".\\data\\", ref.qa, sep = ""))
 
-#find the good measurement, 0 is good measurement, and all the others is not
+################# define two functions for future use  ######################
+# function 1: find the MODIS VI good measurement 
 QAfind.mt = function(m){ ##m is a matrix, row is points, and col is data\e
   nc = ncol(m);nr = nrow(m)
   #change value into bit
@@ -59,8 +64,7 @@ QAfind.mt = function(m){ ##m is a matrix, row is points, and col is data\e
   q.mt = matrix(qc, nrow = nr, ncol = nc, byrow = TRUE)
   return(q.mt)
 }
-
-#the following function get multiple date, and also sort it based on length
+# function 2: find start time for persisent NDVI change
 findmaxtime4 = function(x, threshold1 = 3){ 
   x = as.numeric(x)
   x[which(is.na(x))]=2
@@ -102,7 +106,8 @@ fn = c("lt2010229_p122r20_sub","le2011224_p122r20_sub")
 YearTM = as.numeric(substr(fn, 3,9))
 testr1@data$area = sapply(slot(testr1, "polygons"), slot, "area")
 
-# BEGIN read remote sensing images at ENVI format
+# Read LANDSAT imageries at ENVI format and Create a bunch of list to store spectral indices
+
 nbr.list = list()
 ndvi.list = list()
 band1.list = list()
@@ -120,7 +125,7 @@ cloud.list = list()
 water.list = list()
 for (i in 1:length(fn)){
   
-  r = readGDAL(fn[i]) #r is a spatialdataframe
+  r = readGDAL(paste(".\\data\\", fn[i], sep = "")) #r is a spatialdataframe
   
   r1 <-raster(
     matrix(r@data@.Data[[1]], nrow = r@grid@cells.dim[2], ncol = r@grid@cells.dim[1], byrow = TRUE),
@@ -245,7 +250,7 @@ for (i in 1:length(fn)){
   rm(list = c("r","r1","r2","r3","r4","r5","r6","brightness","greenness","wetness","st"))
 }
 
-#calculate 3*3 median 
+#soomth spectral indices using a 3*3 window size  
 nbr.list2 = list()
 tc2.list2 = list()
 tc3.list2 = list()
@@ -285,11 +290,10 @@ for(i in 1:length(nbr.list)){
   
 }
 
-
 cloud.list2 = cloud.list
 water.list2 = water.list
 
-#calculate index difference
+#calculate spectral indices differece between consective time
 nbr.list2.dif = list()
 tc2.list2.dif = list()
 tc3.list2.dif = list()
@@ -310,40 +314,33 @@ for(i in 2:length(nbr.list2)){
   print(paste("Finish calculating difference ", i," of ", length(nbr.list2), " at ", format(Sys.time(), "%a %b %d %X %Y"), sep = " ") )
 }
 
-############## section 3: extract burned polygons from landsat data
+############## section 3: extract burned polygons from LANDSAT data
 set.seed(1000)
-library(dismo)
-library(rgeos)
 
-nbr.threshold = -0.02
-ndvi.threshold = -0.02
-
-poly.list = list() #to store burned patches, if more than 2 times of landsat data is available
+nbr.threshold = -0.05
+ndvi.threshold = -0.05
+di.threshold = 1
+poly.list = list() #store burned patches, if more than 2 times of landsat data is available
 for (i in 1:length(nbr.list2.dif)){
 #3.1 find burned core pixels and unburned pixels
-  
-	  ## select burned core pixels
-	  burned.core = nbr.list2.dif[[i]] < nbr.threshold & ndvi.list2.dif[[i]] < ndvi.threshold
+ ## select burned core pixels
+	  burned.core = nbr.list2.dif[[i]] < nbr.threshold & ndvi.list2.dif[[i]] < ndvi.threshold & di.list2.dif[[i]] > di.threshold
 	  burned.core[cloud.list2[[i]]==1 | cloud.list2[[i+1]]==1] = 0 #remove cloud influence
-	  
-	#d1.v = freq(di.dif2)
-	#if (length(which(d1.v[,1]==1))>0) {
-	# if(d1.v[which(d1.v[,1]==1),2] > 1000){
-          
-      ##select unburned pixels
-      di.dif3 = nbr.list2.dif[[i]] > 0 &  ndvi.list2.dif[[i]] > 0
-      di.dif3[cloud.list2[[i]]==1 | cloud.list2[[i+1]]==1] = 0 #remove cloud influence
+    
+##select unburned pixels
+      unburned = nbr.list2.dif[[i]] > 0 &  ndvi.list2.dif[[i]] > 0
+      unburned[cloud.list2[[i]]==1 | cloud.list2[[i+1]]==1] = 0 #remove cloud influence
       
 #3.2 using brt model to simulate burned probability
 #3.2.1 preparing dataset   
       
-      di.dif2[di.dif2 == 0] = NA
-      di.dif3[di.dif3 == 0] = NA 
-      r1.xy = rasterToPoints(di.dif2) #get raster coordinate, from left to right, top to bottom
+      burned.core[burned.core == 0] = NA
+      unburned[unburned == 0] = NA 
+      r1.xy = rasterToPoints(burned.core) #get raster coordinate, from left to right, top to bottom
       r1.xy = data.frame(r1.xy)
       r1.xy.sp <- SpatialPoints(coords = cbind(r1.xy$x,r1.xy$y),proj4string = CRS(proj.utm))
       
-      r1.xy2 = rasterToPoints(di.dif3) #get raster coordinate, from left to right, top to bottom
+      r1.xy2 = rasterToPoints(unburned) #get raster coordinate, from left to right, top to bottom
       r1.xy2 = data.frame(r1.xy2)
       r1.xy2.sp <- SpatialPoints(coords = cbind(r1.xy2$x,r1.xy2$y),proj4string = CRS(proj.utm))
       
@@ -373,14 +370,19 @@ for (i in 1:length(nbr.list2.dif)){
                     family = "bernoulli",
                     tree.complexity = 3, 
                     n.trees = 25, learning.rate = 0.01, bag.fraction = 0.5)
+  
+  p <- predict(predictors, brt1, n.trees=brt1$gbm.call$best.trees, type="response")	
+  
+#find the threshold to convert p into a binary raster
+  preds = predict(brt1, dat.df1, n.trees = brt1$gbm.call$best.trees, type="response")
+  d <- cbind(dat.df1$burned, preds)
+  pres <- d[d[,1]==1, 2]
+  abse <- d[d[,1]==0, 2]
+  e <- dismo::evaluate(p=pres, a=abse)
+  p1 = p > threshold(e)$kappa 
       
-   
-      p <- predict(predictors, brt1, n.trees=brt1$gbm.call$best.trees, type="response")	
-    
-      p1 = p > 0.75 
       
-      
-#3.2.3 doing a 3 by 3 windows smoothing
+#3.2.3 doing a 7 by 7 windows smoothing
       p2 = focal(p1, w= matrix(1/49, nc=7, nr=7))
       p2 = p2>=0.5
       p2[p2 == 0] = NA
@@ -461,7 +463,6 @@ plot(cloud.poly, add = TRUE, col = "red")
       polys@data$StartDate =YearTM[i] 
       polys@data$EndDate =YearTM[i+1] 
       
-      
       poly.list[[i]] = polys   
    
   print(paste("Finish extracting ", i," of ", length(nbr.list2.dif), " at ", format(Sys.time(), "%a %b %d %X %Y"), sep = " ") )
@@ -478,7 +479,7 @@ if(length(which(sapply(poly.list,is.null),arr.ind=TRUE))>=1 ) {
 
 ##save the poly into a shapefile
 for (i in 1:length(poly.list)){
-    writeOGR(poly.list[[i]], ".", "test_area_fire", driver="ESRI Shapefile", overwrite_layer=TRUE)
+    writeOGR(poly.list[[i]], ".\\result", "Fire_polys_without_date", driver="ESRI Shapefile", overwrite_layer=TRUE)
   
 }
 
@@ -556,7 +557,7 @@ df1.pred = predict(evi.ols, newdata = ndvi2.df,interval="predict", level = 0.75)
   }
   
   
-writeOGR(firep, ".", "test_area_fire_dated", driver="ESRI Shapefile", overwrite_layer=TRUE)
+writeOGR(firep, ".\\result", "Fire_polys_with_date", driver="ESRI Shapefile", overwrite_layer=TRUE)
   
 ## plot results
 plot(ndvi.list2.dif[[1]], col = colorRampPalette(c("red", "blue", "green"))(255))
