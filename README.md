@@ -1,6 +1,6 @@
 BAED: Burned Area Extraction and Dating
 
-CODE is stored in baed_code.
+CODE is stored in baed_code.r.
 
 Section I: algorithm input and outputs
 
