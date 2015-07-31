@@ -1,12 +1,13 @@
 #3/9/2015
 #by Zhihua Liu: liuzh811@gmail.com
 
-# 1. this code aims at mapping burned area at high spatial and temporal resolution using Landsat and MODIS MOD13Q1 vegetation indices data
+# 1. this code aims at mapping burned area at high spatial and temporal resolution using 
+#    Landsat and MODIS MOD13Q1 vegetation indices data
 # 2. Landsat image should be normalized (Canty and Neilsen et al (2008)) to extract burned area
 # 3. create a "data"  folder to store MODIS and Landsat data, as well as study area polygons
 # 4. create a "result" folder to store fire polygon
 
-############## section 1: download MODIS data and prepare functions
+############## section 1: read MODIS data and prepare functions
 setwd("D:\\GitHub\\BurnedAreaRS")
 
 # load libraries
@@ -17,38 +18,20 @@ library(gbm)
 library(rgeos)
 
 #read test area polygon
-testr1 <- readOGR(dsn = ".\\data", layer = "test_area")
+testr1 <- readOGR(dsn = ".\\data", layer = "test_area") #read test area polygon file
 proj.utm = projection(testr1)
 proj.geo = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs +towgs84=0,0,0 "
 
-#download MODIS13Q1 VI data, see MODIS package for details
-MODISoptions(localArcPath=".",
-             outDirPath=".",
-             gdalPath='c:/OSGeo4W64/bin')
-
-dates <- as.POSIXct( as.Date(c("1/5/2010","1/11/2011"),format = "%d/%m/%Y") )
-dates2 <- transDate(dates[1],dates[2]) # Transform input dates from before
-
-# getProduct() # list available MODIS products
-runGdal(product="MOD13Q1",  #VI/combined/Tile/500m/monthly
-        begin=dates2$beginDOY, #start date
-        end = dates2$endDOY,#end date
-        tileH = 25,tileV = 3, #tile
-        SDSstring = "111", #extract the first 3 layers
-        extent = testr1, #crop to extent
-        outProj=proj.utm, #reproject to UTM
-        job = "data") #download folder
-
 #read MODIS NDVI data 
-ref <- list.files(path=".\\data", pattern="*NDVI.tif$")
-YearDOYmodis = substr(ref, nchar(ref[1])-28, nchar(ref[1])-22)  ##use this one if ndvi dataset was used
-Yearmodis = as.numeric(substr(YearDOYmodis,1,4))
-DOYmodis = as.numeric(substr(YearDOYmodis,5,7))
-s <- stack(paste(".\\data", ref, sep = ""))
+ref <- list.files(path=".\\data", pattern="*NDVI.tif$") #get NDVI data name
+YearDOYmodis = substr(ref, nchar(ref[1])-28, nchar(ref[1])-22)  #get MODIS date
+Yearmodis = as.numeric(substr(YearDOYmodis,1,4)) #get year
+DOYmodis = as.numeric(substr(YearDOYmodis,5,7)) #get day of year
+s <- stack(paste(".\\data", ref, sep = "")) #read NDVI data as raster stack
 
 #read NDVI quality data info
-ref.qa <- list.files(path=".\\data", pattern="*VI_Quality.tif$")
-s.qa <- stack(paste(".\\data\\", ref.qa, sep = ""))
+ref.qa <- list.files(path=".\\data", pattern="*VI_Quality.tif$") #get NDVI data quality name
+s.qa <- stack(paste(".\\data\\", ref.qa, sep = "")) #read NDVI quality data as raster stack
 
 ################# define two functions for future use  ######################
 # function 1: find the MODIS VI good measurement 
@@ -70,8 +53,7 @@ findmaxtime4 = function(x, threshold1 = 3){
   x[which(is.na(x))]=2
   #fill values if there are only one or two missing values
   for(i in 1:(length(x)-4)){
-    
-    if (length(which(x[i:(i+4)]==2))<5){ #judge whether there are two many missing values
+      if (length(which(x[i:(i+4)]==2))<5){ #judge whether there are two many missing values
       if (x[i]==1 & x[i+1]==1 & x[i+2]==0 & x[i+3]==1 & x[i+4]==1) {x[i+2]=1}
       else if (x[i]==1 & x[i+1]==0 & x[i+2]==1 & x[i+3]==1 & x[i+4]==1) {x[i+1]=1}
     } #end of #judge whether there are two many missing values
@@ -86,30 +68,25 @@ findmaxtime4 = function(x, threshold1 = 3){
   idx.0 = which(x[idx]==0) #find the location
   
   diff1 = diff(c(0, idx))[idx.1] #find numbers of consecutive 1
-  
-  
   max.dif = which(diff1>=threshold1)
   #max.dif.idx = rev(sort.int(max.dif, index.return=TRUE)$ix)
   #max.dif = max.dif[max.dif.idx]
-  
-  if(length(max.dif)>0){
+   if(length(max.dif)>0){
     max.loc = idx[idx.1[max.dif]-1]+1
   } else {
     max.loc = "NA"
   }
   return(max.loc)
-  
-}
+  }
 
-############## section 2: read landsat data and preprocessing
-fn = c("lt2010229_p122r20_sub","le2011224_p122r20_sub") 
-YearTM = as.numeric(substr(fn, 3,9))
+############## section 2: read Landsat data and preprocessing
+fn = c("lt2010229_p122r20_sub","le2011224_p122r20_sub") #Landsat file name
+YearTM = as.numeric(substr(fn, 3,9)) #get year
 testr1@data$area = sapply(slot(testr1, "polygons"), slot, "area")
 
 # Read LANDSAT imageries at ENVI format and Create a bunch of list to store spectral indices
-
-nbr.list = list()
-ndvi.list = list()
+nbr.list = list() #NBR 
+ndvi.list = list() #NDVI
 band1.list = list()
 band2.list = list()
 band3.list = list()
@@ -117,12 +94,12 @@ band4.list = list()
 band5.list = list()
 band6.list = list()
 
-tc1.list = list()
-tc2.list = list()
-tc3.list = list()
-di.list = list()
-cloud.list = list()
-water.list = list()
+tc1.list = list() #TC brightness
+tc2.list = list() #TC greenness
+tc3.list = list() #TC wetness
+di.list = list() #disturbance index
+cloud.list = list() #cloud mask
+water.list = list() #water mask
 for (i in 1:length(fn)){
   
   r = readGDAL(paste(".\\data\\", fn[i], sep = "")) #r is a spatialdataframe
@@ -176,6 +153,7 @@ for (i in 1:length(fn)){
   
   #calculate NBR
   nbr = (st[[5]]-st[[6]])/(st[[5]]+st[[6]])
+  
   #calculate TC index
   if(substr(fn[i],1,2) == "le"){
     brightness = 0.3561*st[[1]]+0.3972*st[[2]]+0.3904*st[[3]]+0.6966*st[[4]]+0.2286*st[[5]]+0.1596*st[[6]]  #brightness
@@ -317,6 +295,7 @@ for(i in 2:length(nbr.list2)){
 ############## section 3: extract burned polygons from LANDSAT data
 set.seed(1000)
 
+#set threshold for NBR, NDVI, DI
 nbr.threshold = -0.05
 ndvi.threshold = -0.05
 di.threshold = 1
@@ -381,7 +360,6 @@ for (i in 1:length(nbr.list2.dif)){
   e <- dismo::evaluate(p=pres, a=abse)
   p1 = p > threshold(e)$kappa 
       
-      
 #3.2.3 doing a 7 by 7 windows smoothing
       p2 = focal(p1, w= matrix(1/49, nc=7, nr=7))
       p2 = p2>=0.5
@@ -402,7 +380,6 @@ for (i in 1:length(nbr.list2.dif)){
       }
       
 #remove hole in the polygons 
-     
       j = 1
       n = length(p2.poly@polygons[[1]]@Polygons)
       repeat{
@@ -414,7 +391,6 @@ for (i in 1:length(nbr.list2.dif)){
         } else {j = j+1}
         if (j>=n) break
       }
-      
       
 #break into different polygons
       p = 0
@@ -521,8 +497,8 @@ df1.pred = predict(evi.ols, newdata = ndvi2.df,interval="predict", level = 0.75)
     
     firep.tmp = firep[i,]
     
-       #sampling data points based on based on burned area
-	Rpts1 = spsample(firep.tmp, n=100, type='regular')
+    #sampling data points based on based on burned area
+    Rpts1 = spsample(firep.tmp, n=100, type='regular')
   
     Rpts1.v = extract(s,Rpts1) # Extract the EVI data for the available two layers from the generated stack
     Rpts1.qa.v = extract(s.qa,Rpts1) # Extract the EVI data quality informaiton 
