@@ -3,9 +3,9 @@
 
 # 1. this code aims at mapping burned area at high spatial and temporal resolution using 
 #    Landsat and MODIS MOD13Q1 vegetation indices data
-# 2. Landsat image should be normalized (Canty and Neilsen et al (2008)) to extract burned area
-# 3. create a "data"  folder to store MODIS and Landsat data, as well as study area polygons
-# 4. create a "result" folder to store fire polygon
+# 2. Landsat image should be normalized (e.g., by Canty and Neilsen et al (2008)) to extract burned area
+# 3. Create a "data"  folder to store MODIS and Landsat data, as well as study area polygons
+# 4. Create a "result" folder to store fire polygon
 
 ############## section 1: read MODIS data and prepare functions
 setwd("D:\\GitHub\\BurnedAreaRS")
@@ -22,7 +22,7 @@ testr1 <- readOGR(dsn = ".\\data", layer = "test_area") #read test area polygon 
 proj.utm = projection(testr1)
 proj.geo = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs +towgs84=0,0,0 "
 
-#read MODIS NDVI data 
+#read MODIS NDVI data, see modis_dowbload.r on how to download MODID products 
 ref <- list.files(path=".\\data", pattern="*NDVI.tif$") #get NDVI data name
 YearDOYmodis = substr(ref, nchar(ref[1])-28, nchar(ref[1])-22)  #get MODIS date
 Yearmodis = as.numeric(substr(YearDOYmodis,1,4)) #get year
@@ -81,7 +81,7 @@ findmaxtime4 = function(x, threshold1 = 3){
 
 ############## section 2: read Landsat data and preprocessing
 fn = c("lt2010229_p122r20_sub","le2011224_p122r20_sub") #Landsat file name
-YearTM = as.numeric(substr(fn, 3,9)) #get year
+YearTM = as.numeric(substr(fn, 3,9)) #get Landsat image year
 testr1@data$area = sapply(slot(testr1, "polygons"), slot, "area")
 
 # Read LANDSAT imageries at ENVI format and Create a bunch of list to store spectral indices
@@ -104,6 +104,7 @@ for (i in 1:length(fn)){
   
   r = readGDAL(paste(".\\data\\", fn[i], sep = "")) #r is a spatialdataframe
   
+  #convert to rasters
   r1 <-raster(
     matrix(r@data@.Data[[1]], nrow = r@grid@cells.dim[2], ncol = r@grid@cells.dim[1], byrow = TRUE),
     xmn=r@bbox[1,1], xmx=r@bbox[1,2],
@@ -146,8 +147,6 @@ for (i in 1:length(fn)){
   st = stack(r1,r2,r3,r4,r5,r6)
   st = crop(st, testr1)
   
-  ## st[st < 0] <- NA #this process is very slow
-  ## st[st > 9999] <- NA #this process is very slow
   #calculate NDVI
   ndvi = (st[[4]]-st[[3]])/(st[[4]]+st[[3]])
   
@@ -173,7 +172,7 @@ for (i in 1:length(fn)){
   tc3 <- wetness
   
   #calculate disturbance index
-  # find mature forest, 
+  # find mature forest, calculate mean and standard deviation of TC indices
   mat.for = ndvi > 0.8 & ndvi < 1
   if (length(unique(mat.for)) == 1 & unique(mat.for) == FALSE) {
     mat.for[] = -9999
@@ -205,9 +204,7 @@ for (i in 1:length(fn)){
   MeanVis = (st[[1]]+st[[2]]+st[[3]])/3
   whiteness=abs((st[[1]]-MeanVis)/MeanVis)+abs((st[[2]]-MeanVis)/MeanVis)+abs((st[[3]]-MeanVis)/MeanVis) < 0.7
   b45 =  st[[4]]/st[[5]]>0.75
-    
   cloud.t = st[[6]] > 3000 & ndsi<0.8 & ndvi < 0.8 & whiteness==1 & b45==1
-  
   
   #water mask
   water = (ndvi<0.01 & st[[4]]<110)|(ndvi<0.1 & st[[4]]<50)
@@ -267,7 +264,6 @@ for(i in 1:length(nbr.list)){
   print(paste("Finish calculating moving windows ", i," of ", length(di.list), " at ", format(Sys.time(), "%a %b %d %X %Y"), sep = " ") )
   
 }
-
 cloud.list2 = cloud.list
 water.list2 = water.list
 
@@ -279,7 +275,6 @@ ndvi.list2.dif = list()
 di.list2.dif = list()
 b4.list2.dif = list()
 b5.list2.dif = list()
-
 for(i in 2:length(nbr.list2)){
   nbr.list2.dif[[i-1]] <- nbr.list2[[i]] - nbr.list2[[i-1]]
   tc2.list2.dif[[i-1]] <- tc2.list2[[i]] - tc2.list2[[i-1]]
@@ -288,13 +283,11 @@ for(i in 2:length(nbr.list2)){
   di.list2.dif[[i-1]] <- di.list2[[i]] - di.list2[[i-1]]
   b4.list2.dif[[i-1]] <- b4.list2[[i]] - b4.list2[[i-1]]
   b5.list2.dif[[i-1]] <- b5.list2[[i]] - b5.list2[[i-1]]
-  
   print(paste("Finish calculating difference ", i," of ", length(nbr.list2), " at ", format(Sys.time(), "%a %b %d %X %Y"), sep = " ") )
 }
 
 ############## section 3: extract burned polygons from LANDSAT data
 set.seed(1000)
-
 #set threshold for NBR, NDVI, DI
 nbr.threshold = -0.05
 ndvi.threshold = -0.05
@@ -302,17 +295,16 @@ di.threshold = 1
 poly.list = list() #store burned patches, if more than 2 times of landsat data is available
 for (i in 1:length(nbr.list2.dif)){
 #3.1 find burned core pixels and unburned pixels
- ## select burned core pixels
+ # select burned core pixels, used as case point for the BRT model
 	  burned.core = nbr.list2.dif[[i]] < nbr.threshold & ndvi.list2.dif[[i]] < ndvi.threshold & di.list2.dif[[i]] > di.threshold
 	  burned.core[cloud.list2[[i]]==1 | cloud.list2[[i+1]]==1] = 0 #remove cloud influence
     
-##select unburned pixels
+#select unburned pixels, used as control point for the BRT model
       unburned = nbr.list2.dif[[i]] > 0 &  ndvi.list2.dif[[i]] > 0
       unburned[cloud.list2[[i]]==1 | cloud.list2[[i+1]]==1] = 0 #remove cloud influence
       
 #3.2 using brt model to simulate burned probability
 #3.2.1 preparing dataset   
-      
       burned.core[burned.core == 0] = NA
       unburned[unburned == 0] = NA 
       r1.xy = rasterToPoints(burned.core) #get raster coordinate, from left to right, top to bottom
@@ -339,9 +331,8 @@ for (i in 1:length(nbr.list2.dif)){
       
       r1.xy2.sp.df = extract(predictors, r1.xy2.sp)
       r1.xy2.sp.df = data.frame(r1.xy2.sp.df, burned = 0)
-      
       dat.df = rbind(r1.xy.sp.df, r1.xy2.sp.df)
-      
+#select only 3000 points to speedup BRT modeling
       dat.df1 = rbind(dat.df[sample(nrow(dat.df[dat.df$burned==1,]), 1000), ],dat.df[sample(nrow(dat.df[dat.df$burned==0,]), 2000), ]) 
 #3.2.2 brt modeling
       brt1=gbm.step(data = dat.df1, gbm.x = 1:(ncol(dat.df1)-1),
@@ -366,24 +357,20 @@ for (i in 1:length(nbr.list2.dif)){
       p2[p2 == 0] = NA
       ##change to polygon
       p2.poly = rasterToPolygons(p2, n=4, na.rm=TRUE, digits=12, dissolve=TRUE)
-      p2.poly.copy = p2.poly  #backup a copy of
-      
+
 #3.2.4 remove holes from the polygon
 #doing some plot to see if there are hole in the polygons
       plot(p2.poly)
       for(ii in 1:length(p2.poly@polygons[[1]]@Polygons)){
-        
         polygon(p2.poly@polygons[[1]]@Polygons[[ii]]@coords, col = ii)
         text(x = p2.poly@polygons[[1]]@Polygons[[ii]]@labpt[1], y = p2.poly@polygons[[1]]@Polygons[[ii]]@labpt[2],
              labels = p2.poly@polygons[[1]]@Polygons[[ii]]@hole)
-        
       }
       
 #remove hole in the polygons 
       j = 1
       n = length(p2.poly@polygons[[1]]@Polygons)
       repeat{
-        #for(j in 1:length(patch.poly3.list2.sp@polygons[[1]]@Polygons)){
         if (p2.poly@polygons[[1]]@Polygons[[j]]@hole == "TRUE"){
           p2.poly@polygons[[1]]@Polygons[[j]] <- NULL
           n = n-1
@@ -398,78 +385,58 @@ for (i in 1:length(nbr.list2.dif)){
       for(j in 1:length(p2.poly@polygons[[1]]@Polygons)){
         p = p+1
         patch.poly5.list2[[p]] = Polygons(list(Polygon(p2.poly@polygons[[1]]@Polygons[[j]]@coords)),ID=p)
-        
       }
-      
       polys <- SpatialPolygons(patch.poly5.list2, proj4string=CRS(proj.utm))
       dat.df = data.frame(value=1:length(patch.poly5.list2), row.names=1:length(patch.poly5.list2)) 
       polys = SpatialPolygonsDataFrame(polys, dat.df)
-      
       polys@data$area = sapply(slot(polys, "polygons"), slot, "area")
       
-# remove area smaller than 10 cells 
+# remove area smaller than 1 MODIS cells (250 m resolution) 
       polys = polys[which(polys@data$area>62500), ]  
      
 # mark the potential cloud contaminated polygons   
       cloud.t = cloud.list2[[i]]==1 | cloud.list2[[i+1]]==1
       cloud.t[cloud.t==0] = NA
-      
       polys@data$cloud = 0  #0 is outside cloud
       if(freq(cloud.t)[which(is.na(freq(cloud.t)[,1])),2] < ncell(p1)){
         cloud.poly = rasterToPolygons(cloud.t, n=4, na.rm=TRUE, digits=12, dissolve=TRUE)
-        
         for (p2 in 1:length(polys)){
           tmp = polys[p2,]
-          
           if(is.null(gIntersection(cloud.poly, tmp))){polys@data$cloud[p2] = 0}
           else if (gContains(cloud.poly, tmp) == TRUE) {polys@data$cloud[p2] = 2} # complete within cloud 
           else {polys@data$cloud[p2] = 1}  # on cloud boundary
         }
-      
       }
-  
-
   # plot results, 0-clear; 1-extract burned polygon is on the cloud boundary; 2-extract burned polygon is complete within the clouds
 plot(polys)
 polygonsLabel(polys, labels = polys@data$cloud, method = "centroid", cex = 1.5, col = "green", pch=19)
 plot(cloud.poly, add = TRUE, col = "red")
-
-  
 #assign the time frame for disturbance from landsat data
       polys@data$StartDate =YearTM[i] 
       polys@data$EndDate =YearTM[i+1] 
-      
       poly.list[[i]] = polys   
-   
-  print(paste("Finish extracting ", i," of ", length(nbr.list2.dif), " at ", format(Sys.time(), "%a %b %d %X %Y"), sep = " ") )
-  
-}
+  print(paste("Finish extracting ", i," of ", length(nbr.list2.dif), " at ", format(Sys.time(), "%a %b %d %X %Y"), sep = " ")
+  }
 
 #remove empty elements for the poly.list
 poly.list2 = poly.list
-
 if(length(which(sapply(poly.list,is.null),arr.ind=TRUE))>=1 ) {
   poly.list = poly.list[-which(sapply(poly.list,is.null),arr.ind=TRUE)]
 }
-#
-
 ##save the poly into a shapefile
 for (i in 1:length(poly.list)){
     writeOGR(poly.list[[i]], ".\\result", "Fire_polys_without_date", driver="ESRI Shapefile", overwrite_layer=TRUE)
-  
 }
 
 ############## section 4: assign disturbance date from MODIS dataset
-# 4.1 need to find persistent forest from landsat and use it to construct a model from MODIS data
+# 4.1 need to find persistent forest from landsat and construct a phenology model for NDVI (EVI) from MODIS data
 # find persistent forest from landsat
 set.seed(1001)	
 ndvi2 = ndvi.list[[1]]>0.6 & ndvi.list[[1]] < 1 & ndvi.list[[2]] > 0.6 & ndvi.list[[2]] < 1 
 ndvi2[ndvi2==0] = NA
 ndvi2.pts = rasterToPoints(ndvi2) 
 ndvi2.pts = data.frame(ndvi2.pts)
-
 if (nrow(ndvi2.pts) > 5000){ndvi2.pts = ndvi2.pts[sample(1:nrow(ndvi2.pts), 5000), ]}
-
 ndvi2.pts <- SpatialPoints(coords = cbind(ndvi2.pts$x,ndvi2.pts$y),proj4string = CRS(proj.utm))
 ndvi2.df = data.frame(t(extract(s, ndvi2.pts)))
 
@@ -492,46 +459,30 @@ df1.pred = predict(evi.ols, newdata = ndvi2.df,interval="predict", level = 0.75)
   firep@data$Fireid = 1:nrow(firep)
   firep@data$area = sapply(slot(firep, "polygons"), slot, "area")  #calculate area
   firep@data$dist_time = 0
-  
   for(i in 1:length(firep@data$Fireid)){
-    
     firep.tmp = firep[i,]
-    
     #sampling data points based on based on burned area
     Rpts1 = spsample(firep.tmp, n=100, type='regular')
-  
     Rpts1.v = extract(s,Rpts1) # Extract the EVI data for the available two layers from the generated stack
     Rpts1.qa.v = extract(s.qa,Rpts1) # Extract the EVI data quality informaiton 
-    
    ##find only good measurement
     Rpts1.qa.v2 = QAfind.mt(Rpts1.qa.v)
     bad.idx2 = which(Rpts1.qa.v2 > 0, arr.ind = TRUE)  #0 is good measurement, 1 is useable, but check other QA infos, 
     Rpts1.v[bad.idx2] = NA #relpamce bad measruement with NA
-    
     dat = data.frame(Burn = apply(Rpts1.v,2,median, na.rm = TRUE), df1.pred)
-    
     # matplot(dat, col=c(1,2,3,3), lty = c(1,1,2,2), lwd = c(2,2,1,1),type = "b", ylab = "predicted y")
     # if it is significant bigger for more than a certain period of time, then, it should be fire, otherwise, not fire
     dat.dif = dat$lwr-dat$Burn
-
     dat.dif[which(dat.dif>0)] = 1
     dat.dif[which(dat.dif<=0)] = 0
-    
     dist_time = as.numeric(YearDOYmodis[findmaxtime4(dat.dif, threshold = 3)])
-    
     #if there are multiple date, then, check which one is in the landsat time frame
     dist_time_lt = which(dist_time>=firep@data$StartDate[i]&dist_time<=firep@data$EndDate[i])
     if(length(dist_time_lt)>0){
-      
       firep@data$dist_time[i] = dist_time[dist_time_lt[1]]-8  ##assume the disturbance occur between the two date
-      
     } else {firep@data$dist_time[i] = NA}
-    
-    
   print(paste("Finish find disturbance time ", i," of ", length(firep@data$Fireid), " at ", format(Sys.time(), "%a %b %d %X %Y"), sep = " ") )
-    
   }
-  
   
 writeOGR(firep, ".\\result", "Fire_polys_with_date", driver="ESRI Shapefile", overwrite_layer=TRUE)
   
