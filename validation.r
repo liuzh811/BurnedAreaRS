@@ -410,6 +410,7 @@ png("region2-2.png",height = 3000, width = 4500, res = 300, units = "px")
 
 plot(ba.grd3, legend=FALSE, axes=FALSE, box=FALSE)
 plot(r3_firepoly2[!is.na(r3_firepoly2$dist_time),], border = "black", lwd = 2, add = T)
+plot(fire.sp3[1,], border = "black", lwd = 2, add = T)
 #plot(fire.sp3, border = "red", lwd = 2, add = T)
 plot(fire.sp.hz3, add = TRUE, pch = 20, col = "blue")
 
